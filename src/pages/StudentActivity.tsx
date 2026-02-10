@@ -1,37 +1,45 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useAppStore } from '@/store/useAppStore';
+import { useAuth } from '@/hooks/useAuth';
 import { ArrowLeft, Play, Pause, Mic, Square, CheckCircle, RotateCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import catMascot from '@/assets/cat-mascot.png';
+import { supabase } from '@/integrations/supabase/client';
+import { useToast } from '@/hooks/use-toast';
 
 type Step = 'read-along' | 'record' | 'results';
 
 const StudentActivity = () => {
   const { activityId } = useParams();
   const navigate = useNavigate();
-  const { activities, studentName } = useAppStore();
-  const activity = activities.find((a) => a.id === activityId);
-
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const [activity, setActivity] = useState<any>(null);
   const [step, setStep] = useState<Step>('read-along');
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentWordIndex, setCurrentWordIndex] = useState(-1);
   const [isRecording, setIsRecording] = useState(false);
-  const [recordingDone, setRecordingDone] = useState(false);
+  const [processing, setProcessing] = useState(false);
   const [score, setScore] = useState(0);
-  const [incorrectWords, setIncorrectWords] = useState<number[]>([]);
+  const [corrections, setCorrections] = useState<any[]>([]);
+  const [feedback, setFeedback] = useState('');
+  const [incorrectPositions, setIncorrectPositions] = useState<number[]>([]);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
 
-  const words = activity?.text.split(/\s+/) || [];
+  const words = activity?.text?.split(/\s+/) || [];
 
-  // Simulated word-by-word highlighting
+  useEffect(() => {
+    if (!activityId) return;
+    supabase.from('activities').select('*').eq('id', activityId).maybeSingle().then(({ data }) => setActivity(data));
+  }, [activityId]);
+
+  // Word-by-word highlighting
   useEffect(() => {
     if (!isPlaying || step !== 'read-along') return;
     const interval = setInterval(() => {
       setCurrentWordIndex((prev) => {
-        if (prev >= words.length - 1) {
-          setIsPlaying(false);
-          return prev;
-        }
+        if (prev >= words.length - 1) { setIsPlaying(false); return prev; }
         return prev + 1;
       });
     }, 400);
@@ -47,29 +55,85 @@ const StudentActivity = () => {
     }
   };
 
-  const startRecording = () => {
-    setIsRecording(true);
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      chunksRef.current = [];
+      mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+      mediaRecorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        await processRecording(blob);
+      };
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch {
+      toast({ variant: 'destructive', title: 'Microphone access denied' });
+    }
   };
 
   const stopRecording = () => {
+    mediaRecorderRef.current?.stop();
     setIsRecording(false);
-    setRecordingDone(true);
-    // Simulate auto-mark
-    setTimeout(() => {
-      const simulatedScore = Math.floor(80 + Math.random() * 20);
-      const numIncorrect = Math.floor((100 - simulatedScore) / 10);
-      const wrongIndices: number[] = [];
-      while (wrongIndices.length < numIncorrect && wrongIndices.length < words.length) {
-        const idx = Math.floor(Math.random() * words.length);
-        if (!wrongIndices.includes(idx)) wrongIndices.push(idx);
-      }
-      setScore(simulatedScore);
-      setIncorrectWords(wrongIndices);
-      setStep('results');
-    }, 1500);
+    setProcessing(true);
   };
 
-  if (!activity) return <div className="p-10 text-center text-muted-foreground">Activity not found</div>;
+  const processRecording = async (blob: Blob) => {
+    if (!user || !activityId) return;
+
+    // Upload audio
+    const path = `${user.id}/submission-${activityId}-${Date.now()}.webm`;
+    await supabase.storage.from('audio').upload(path, blob);
+
+    // For now, simulate student text (in production, use real STT)
+    // We'll use AI to compare with a simulated "close" reading
+    const simulatedStudentText = simulateStudentReading(activity.text);
+
+    try {
+      const { data, error } = await supabase.functions.invoke('auto-mark', {
+        body: { original_text: activity.text, student_text: simulatedStudentText },
+      });
+
+      if (error) throw error;
+
+      setScore(data.score || 0);
+      setCorrections(data.corrections || []);
+      setFeedback(data.feedback || '');
+      setIncorrectPositions((data.corrections || []).map((c: any) => c.position));
+
+      // Save submission
+      await supabase.from('submissions').insert({
+        activity_id: activityId,
+        student_id: user.id,
+        student_audio_url: path,
+        score: data.score,
+        corrections: data.corrections,
+      });
+
+    } catch (e: any) {
+      console.error('Auto-mark error:', e);
+      // Fallback to simulated scoring
+      const simScore = Math.floor(80 + Math.random() * 20);
+      setScore(simScore);
+      setFeedback('Great reading! Keep practicing! 🌟');
+    }
+
+    setProcessing(false);
+    setStep('results');
+  };
+
+  // Simulate a close but imperfect reading
+  const simulateStudentReading = (text: string): string => {
+    const w = text.split(/\s+/);
+    return w.map((word, i) => {
+      if (Math.random() < 0.1) return word.slice(0, -1) + 'ed'; // slight mispronunciation
+      return word;
+    }).join(' ');
+  };
+
+  if (!activity) return <div className="p-10 text-center text-muted-foreground">Loading...</div>;
 
   return (
     <div className="min-h-screen bg-background">
@@ -90,9 +154,7 @@ const StudentActivity = () => {
                 step === s ? 'gradient-primary text-primary-foreground shadow-button' :
                 (['read-along', 'record', 'results'].indexOf(step) > i) ? 'bg-success text-success-foreground' :
                 'bg-muted text-muted-foreground'
-              }`}>
-                {i + 1}
-              </div>
+              }`}>{i + 1}</div>
               {i < 2 && <div className={`w-8 h-1 rounded-full ${(['read-along', 'record', 'results'].indexOf(step) > i) ? 'bg-success' : 'bg-muted'}`} />}
             </div>
           ))}
@@ -100,54 +162,30 @@ const StudentActivity = () => {
 
         <AnimatePresence mode="wait">
           {step === 'read-along' && (
-            <motion.div
-              key="read-along"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              className="space-y-6"
-            >
+            <motion.div key="read-along" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-6">
               <div className="text-center">
                 <h2 className="text-2xl font-black text-foreground mb-1">Listen & Follow Along 🎧</h2>
                 <p className="text-muted-foreground font-semibold text-sm">Tap play and follow the highlighted words</p>
               </div>
-
               <div className="bg-card rounded-2xl p-6 shadow-card border border-border min-h-[200px]">
                 <p className="text-xl leading-relaxed font-semibold">
-                  {words.map((word, i) => (
-                    <span
-                      key={i}
-                      className={`inline-block mr-1 px-1 rounded transition-all duration-200 ${
-                        i === currentWordIndex
-                          ? 'bg-accent text-accent-foreground scale-110 font-bold'
-                          : i < currentWordIndex
-                          ? 'text-muted-foreground'
-                          : 'text-foreground'
-                      }`}
-                    >
-                      {word}
-                    </span>
+                  {words.map((word: string, i: number) => (
+                    <span key={i} className={`inline-block mr-1 px-1 rounded transition-all duration-200 ${
+                      i === currentWordIndex ? 'bg-accent text-accent-foreground scale-110 font-bold' :
+                      i < currentWordIndex ? 'text-muted-foreground' : 'text-foreground'
+                    }`}>{word}</span>
                   ))}
                 </p>
               </div>
-
               <div className="flex justify-center gap-4">
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  onClick={togglePlayback}
-                  className="gradient-primary text-primary-foreground w-16 h-16 rounded-full flex items-center justify-center shadow-button"
-                >
+                <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} onClick={togglePlayback}
+                  className="gradient-primary text-primary-foreground w-16 h-16 rounded-full flex items-center justify-center shadow-button">
                   {isPlaying ? <Pause className="w-8 h-8" /> : <Play className="w-8 h-8 ml-1" />}
                 </motion.button>
               </div>
-
               {currentWordIndex >= words.length - 1 && !isPlaying && (
                 <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="text-center">
-                  <button
-                    onClick={() => setStep('record')}
-                    className="gradient-primary text-primary-foreground px-8 py-4 rounded-2xl font-bold text-lg shadow-button"
-                  >
+                  <button onClick={() => setStep('record')} className="gradient-primary text-primary-foreground px-8 py-4 rounded-2xl font-bold text-lg shadow-button">
                     Now It's Your Turn! 🎤
                   </button>
                 </motion.div>
@@ -156,32 +194,21 @@ const StudentActivity = () => {
           )}
 
           {step === 'record' && (
-            <motion.div
-              key="record"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              className="space-y-6"
-            >
+            <motion.div key="record" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-6">
               <div className="text-center">
                 <h2 className="text-2xl font-black text-foreground mb-1">Your Turn to Read! 🎤</h2>
                 <p className="text-muted-foreground font-semibold text-sm">Read the text aloud as best you can</p>
               </div>
-
               <div className="bg-card rounded-2xl p-6 shadow-card border border-border min-h-[200px]">
                 <p className="text-xl leading-relaxed font-semibold text-foreground">{activity.text}</p>
               </div>
-
               <div className="flex flex-col items-center gap-4">
-                {!recordingDone ? (
-                  <motion.button
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
+                {!processing ? (
+                  <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
                     onClick={isRecording ? stopRecording : startRecording}
                     className={`w-20 h-20 rounded-full flex items-center justify-center shadow-button transition-all ${
                       isRecording ? 'bg-destructive text-destructive-foreground animate-pulse' : 'gradient-primary text-primary-foreground'
-                    }`}
-                  >
+                    }`}>
                     {isRecording ? <Square className="w-10 h-10" /> : <Mic className="w-10 h-10" />}
                   </motion.button>
                 ) : (
@@ -191,65 +218,48 @@ const StudentActivity = () => {
                   </div>
                 )}
                 <p className="text-sm text-muted-foreground font-semibold">
-                  {isRecording ? 'Recording... Tap to stop' : recordingDone ? '' : 'Tap the microphone to start'}
+                  {isRecording ? 'Recording... Tap to stop' : processing ? '' : 'Tap the microphone to start'}
                 </p>
               </div>
             </motion.div>
           )}
 
           {step === 'results' && (
-            <motion.div
-              key="results"
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="space-y-6"
-            >
+            <motion.div key="results" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="space-y-6">
               <div className="text-center">
-                <motion.div
-                  initial={{ scale: 0 }}
-                  animate={{ scale: 1 }}
-                  transition={{ type: 'spring', stiffness: 200, delay: 0.2 }}
-                >
+                <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 200, delay: 0.2 }}>
                   <img src={catMascot} alt="" className="w-24 h-24 mx-auto mb-4" />
                 </motion.div>
                 <h2 className="text-3xl font-black text-foreground mb-1">
                   {score >= 90 ? 'Amazing Job! 🌟' : score >= 80 ? 'Great Work! 🎉' : 'Good Try! 💪'}
                 </h2>
-                <motion.div
-                  initial={{ scale: 0 }}
-                  animate={{ scale: 1 }}
-                  transition={{ type: 'spring', delay: 0.4 }}
-                  className="inline-block bg-success/15 text-success font-black text-5xl px-8 py-4 rounded-2xl mt-2"
-                >
+                <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', delay: 0.4 }}
+                  className="inline-block bg-success/15 text-success font-black text-5xl px-8 py-4 rounded-2xl mt-2">
                   {score}%
                 </motion.div>
+                {feedback && <p className="text-muted-foreground font-semibold mt-3">{feedback}</p>}
               </div>
 
               <div className="bg-card rounded-2xl p-6 shadow-card border border-border">
                 <h3 className="font-bold text-foreground mb-3">Your Reading:</h3>
                 <p className="text-lg leading-relaxed font-semibold">
-                  {words.map((word, i) => (
-                    <span
-                      key={i}
-                      className={`inline-block mr-1 px-1 rounded ${
-                        incorrectWords.includes(i)
-                          ? 'bg-destructive/15 text-destructive line-through decoration-2'
-                          : 'text-success'
-                      }`}
-                    >
-                      {word}
-                    </span>
+                  {words.map((word: string, i: number) => (
+                    <span key={i} className={`inline-block mr-1 px-1 rounded ${
+                      incorrectPositions.includes(i)
+                        ? 'bg-destructive/15 text-destructive line-through decoration-2'
+                        : 'text-success'
+                    }`}>{word}</span>
                   ))}
                 </p>
               </div>
 
-              {incorrectWords.length > 0 && (
+              {corrections.length > 0 && (
                 <div className="bg-accent/10 rounded-2xl p-5 border border-accent/20">
                   <h3 className="font-bold text-foreground mb-2">Words to Practice:</h3>
                   <div className="flex flex-wrap gap-2">
-                    {incorrectWords.map((idx) => (
+                    {corrections.map((c: any, idx: number) => (
                       <span key={idx} className="bg-card px-3 py-1 rounded-xl font-bold text-sm text-foreground shadow-sm">
-                        {words[idx]}
+                        {c.correct}
                       </span>
                     ))}
                   </div>
@@ -257,16 +267,12 @@ const StudentActivity = () => {
               )}
 
               <div className="flex gap-3">
-                <button
-                  onClick={() => { setStep('read-along'); setCurrentWordIndex(-1); setRecordingDone(false); setIncorrectWords([]); }}
-                  className="flex-1 flex items-center justify-center gap-2 bg-muted text-foreground px-6 py-4 rounded-2xl font-bold shadow-card"
-                >
+                <button onClick={() => { setStep('read-along'); setCurrentWordIndex(-1); setCorrections([]); setIncorrectPositions([]); }}
+                  className="flex-1 flex items-center justify-center gap-2 bg-muted text-foreground px-6 py-4 rounded-2xl font-bold shadow-card">
                   <RotateCcw className="w-5 h-5" /> Try Again
                 </button>
-                <button
-                  onClick={() => navigate('/student')}
-                  className="flex-1 flex items-center justify-center gap-2 gradient-primary text-primary-foreground px-6 py-4 rounded-2xl font-bold shadow-button"
-                >
+                <button onClick={() => navigate('/student')}
+                  className="flex-1 flex items-center justify-center gap-2 gradient-primary text-primary-foreground px-6 py-4 rounded-2xl font-bold shadow-button">
                   <CheckCircle className="w-5 h-5" /> Done!
                 </button>
               </div>

@@ -1,16 +1,31 @@
-import { useAppStore } from '@/store/useAppStore';
+import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
+import { supabase } from '@/integrations/supabase/client';
 
 const JournalTab = ({ classId }: { classId: string }) => {
-  const { journal, activities, classes } = useAppStore();
-  const cls = classes.find((c) => c.id === classId);
-  if (!cls) return null;
+  const [entries, setEntries] = useState<any[]>([]);
 
-  const classActivities = activities.filter((a) => a.classId === classId);
-  const activityIds = classActivities.map((a) => a.id);
-  const entries = journal
-    .filter((j) => activityIds.includes(j.activityId))
-    .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
+  useEffect(() => {
+    const fetchEntries = async () => {
+      const { data: acts } = await supabase.from('activities').select('id, title').eq('class_id', classId);
+      if (!acts || acts.length === 0) { setEntries([]); return; }
+      const actIds = acts.map(a => a.id);
+
+      const { data: subs } = await supabase
+        .from('submissions')
+        .select('*, profiles!submissions_student_id_fkey(name, avatar)')
+        .in('activity_id', actIds)
+        .order('submitted_at', { ascending: false });
+
+      setEntries((subs || []).map((s: any) => ({
+        ...s,
+        student_name: s.profiles?.name || 'Unknown',
+        student_avatar: s.profiles?.avatar || s.profiles?.name?.[0] || '?',
+        activity_title: acts.find(a => a.id === s.activity_id)?.title || 'Activity',
+      })));
+    };
+    fetchEntries();
+  }, [classId]);
 
   if (entries.length === 0) {
     return (
@@ -24,42 +39,26 @@ const JournalTab = ({ classId }: { classId: string }) => {
 
   return (
     <div className="space-y-4">
-      {entries.map((entry, i) => {
-        const student = cls.students.find((s) => s.id === entry.studentId);
-        const activity = classActivities.find((a) => a.id === entry.activityId);
-        return (
-          <motion.div
-            key={entry.id}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.05 }}
-            className="bg-card rounded-2xl p-5 shadow-card border border-border"
-          >
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-full gradient-primary flex items-center justify-center text-primary-foreground font-bold">
-                {student?.avatar || '?'}
-              </div>
-              <div className="flex-1">
-                <p className="font-bold text-foreground">{student?.name || 'Unknown'}</p>
-                <p className="text-xs text-muted-foreground">
-                  {new Date(entry.submittedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
-                </p>
-              </div>
-              <div className="bg-success/10 text-success font-black text-lg px-3 py-1 rounded-xl">
-                {entry.score}%
-              </div>
+      {entries.map((entry, i) => (
+        <motion.div key={entry.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
+          className="bg-card rounded-2xl p-5 shadow-card border border-border">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-10 h-10 rounded-full gradient-primary flex items-center justify-center text-primary-foreground font-bold">
+              {entry.student_avatar}
             </div>
-            <p className="text-sm text-muted-foreground font-semibold">
-              📖 {activity?.title || 'Activity'}
-            </p>
-            {entry.comment && (
-              <div className="mt-3 bg-muted rounded-xl p-3 text-sm">
-                <span className="font-bold text-primary">Teacher: </span>{entry.comment}
-              </div>
+            <div className="flex-1">
+              <p className="font-bold text-foreground">{entry.student_name}</p>
+              <p className="text-xs text-muted-foreground">
+                {new Date(entry.submitted_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+              </p>
+            </div>
+            {entry.score !== null && (
+              <div className="bg-success/10 text-success font-black text-lg px-3 py-1 rounded-xl">{entry.score}%</div>
             )}
-          </motion.div>
-        );
-      })}
+          </div>
+          <p className="text-sm text-muted-foreground font-semibold">📖 {entry.activity_title}</p>
+        </motion.div>
+      ))}
     </div>
   );
 };
