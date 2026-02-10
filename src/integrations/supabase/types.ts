@@ -14,13 +14,244 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      activities: {
+        Row: {
+          audio_url: string | null
+          class_id: string
+          created_at: string
+          created_by: string
+          id: string
+          text: string
+          title: string
+        }
+        Insert: {
+          audio_url?: string | null
+          class_id: string
+          created_at?: string
+          created_by: string
+          id?: string
+          text: string
+          title: string
+        }
+        Update: {
+          audio_url?: string | null
+          class_id?: string
+          created_at?: string
+          created_by?: string
+          id?: string
+          text?: string
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "activities_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "activities_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      class_members: {
+        Row: {
+          class_id: string
+          id: string
+          joined_at: string
+          student_id: string
+        }
+        Insert: {
+          class_id: string
+          id?: string
+          joined_at?: string
+          student_id: string
+        }
+        Update: {
+          class_id?: string
+          id?: string
+          joined_at?: string
+          student_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "class_members_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "class_members_student_id_fkey"
+            columns: ["student_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      classes: {
+        Row: {
+          code: string
+          created_at: string
+          grade: string
+          icon: string
+          id: string
+          name: string
+          teacher_id: string
+        }
+        Insert: {
+          code?: string
+          created_at?: string
+          grade?: string
+          icon?: string
+          id?: string
+          name: string
+          teacher_id: string
+        }
+        Update: {
+          code?: string
+          created_at?: string
+          grade?: string
+          icon?: string
+          id?: string
+          name?: string
+          teacher_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "classes_teacher_id_fkey"
+            columns: ["teacher_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      journal_entries: {
+        Row: {
+          created_at: string
+          id: string
+          student_id: string
+          submission_id: string
+          teacher_comment: string | null
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          student_id: string
+          submission_id: string
+          teacher_comment?: string | null
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          student_id?: string
+          submission_id?: string
+          teacher_comment?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "journal_entries_student_id_fkey"
+            columns: ["student_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "journal_entries_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      profiles: {
+        Row: {
+          avatar: string | null
+          created_at: string
+          id: string
+          name: string
+          role: string
+          updated_at: string
+        }
+        Insert: {
+          avatar?: string | null
+          created_at?: string
+          id: string
+          name: string
+          role: string
+          updated_at?: string
+        }
+        Update: {
+          avatar?: string | null
+          created_at?: string
+          id?: string
+          name?: string
+          role?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      submissions: {
+        Row: {
+          activity_id: string
+          corrections: Json | null
+          id: string
+          score: number | null
+          student_audio_url: string | null
+          student_id: string
+          submitted_at: string
+        }
+        Insert: {
+          activity_id: string
+          corrections?: Json | null
+          id?: string
+          score?: number | null
+          student_audio_url?: string | null
+          student_id: string
+          submitted_at?: string
+        }
+        Update: {
+          activity_id?: string
+          corrections?: Json | null
+          id?: string
+          score?: number | null
+          student_audio_url?: string | null
+          student_id?: string
+          submitted_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "submissions_activity_id_fkey"
+            columns: ["activity_id"]
+            isOneToOne: false
+            referencedRelation: "activities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submissions_student_id_fkey"
+            columns: ["student_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      get_user_role: { Args: never; Returns: string }
+      is_student_in_class: { Args: { p_class_id: string }; Returns: boolean }
+      is_teacher_of_class: { Args: { p_class_id: string }; Returns: boolean }
     }
     Enums: {
       [_ in never]: never
